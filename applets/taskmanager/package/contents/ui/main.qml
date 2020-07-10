@@ -63,6 +63,7 @@ MouseArea {
 //END TODO
 
     property Item dragSource: null
+    property Task lastTask: null
 
     signal requestLayout
     signal windowsHovered(variant winIds, bool hovered)
@@ -380,6 +381,10 @@ MouseArea {
 
         target: taskList
 
+        onItemDragged: {
+            saveTask(insertAt, prevIndex);
+        }
+
         onUrlsDropped: {
             // If all dropped URLs point to application desktop files, we'll add a launcher for each of them.
             var createLaunchers = urls.every(function (item) {
@@ -451,11 +456,26 @@ MouseArea {
             onTriggered: taskList.layout()
         }
 
+
+       Timer {
+          id: organizeTimer
+          interval: 500;
+          running: false;
+          repeat: false;
+          onTriggered:{
+              restoreManualSort(lastTask)
+          }
+        }
+
         Repeater {
             id: taskRepeater
 
             delegate: Task {}
-            onItemAdded: taskList.layout()
+            onItemAdded: {
+                lastTask=item
+                organizeTimer.start()
+                taskList.layout()
+            }
             onItemRemoved: {
                 if (tasks.containsMouse && index != taskRepeater.count &&
                     item.winIdList.length > 0 && taskClosedWithMouseMiddleButton.indexOf(item.winIdList[0]) > -1) {
@@ -469,6 +489,99 @@ MouseArea {
     }
 
     GroupDialog { id: groupDialog }
+
+    function mergeDeep(target, source) {
+        const isObject = (obj) => obj && typeof obj === 'object';
+        if (!isObject(target) || !isObject(source)) {
+            return source;
+         }
+         Object.keys(source).forEach(key => {
+            const targetValue = target[key];
+            const sourceValue = source[key];
+             if (Array.isArray(targetValue) && Array.isArray(sourceValue)) {
+                 target[key] = targetValue.concat(sourceValue);
+             } else if (isObject(targetValue) && isObject(sourceValue)) {
+                 target[key] = mergeDeep(Object.assign({
+                }, targetValue), sourceValue);
+             } else {
+                 target[key] = sourceValue;
+             }
+         });
+         return target;
+     }
+     //Runs in the end of taskMove
+     //stores The application, activity, virtual desktop and position order each time an task is dragged
+     function saveTask(at, from){
+          var app=tasks.dragSource.m.AppName //tasksModel.appName, //??
+          var activity=tasksModel.activity
+          var desktop=tasksModel.virtualDesktop
+          var taskData={[activity]: {
+                      [desktop]: {
+                      [app]: at
+                  }
+              }
+          };
+          var order= JSON.parse(plasmoid.configuration.ordering)
+          //replace or create app entry
+          mergeDeep(order, taskData)
+          //keep track of the task that moved with it
+          var tasksList=order[activity][desktop]
+          for(var i=0; i<taskRepeater.count; i++){
+              var otherItem=taskRepeater.itemAt(i);
+              var name=otherItem.appName;
+              var value=desktop[name]
+             order[activity][desktop][name]=i
+          }
+
+          //save file
+          var data = JSON.stringify(order)
+          plasmoid.configuration.ordering=data
+      }
+
+
+    function restoreManualSort(item, check=true){
+      //check manual ordering
+      if (tasksModel.sortMode === TaskManager.TasksModel.SortManual){
+          var order= JSON.parse(plasmoid.configuration.ordering)
+          if(order[tasksModel.activity] && order[tasksModel.activity][tasksModel.virtualDesktop]){
+              var desktop=order[tasksModel.activity][tasksModel.virtualDesktop]
+              var app=desktop[item.appName]
+              if(app!==undefined && app!==null){
+                var place=0;
+                for (let [name, appIndex] of Object.entries(desktop).sort((a, b) => a[1]-b[1])){
+                    var searchName=""
+                    var apps=[];
+                     for(var i=0; i<taskRepeater.count; i++){
+                        var otherItem=taskRepeater.itemAt(i);
+                        searchName=otherItem.appName;
+                        if(searchName===name)
+                            apps.push(i);
+                      }
+                      if(apps.length===0)
+                          continue
+                      for(var j=0; j<apps.length; j++){
+                          i=apps[j]
+                          item=taskRepeater.itemAt(i)
+                          var itemIndex=item.itemIndex;
+                          //Move task
+                          if(itemIndex!==place){
+                            if (groupDialog.visible && groupDialog.visualParent) {
+                                tasksModel.move(itemIndex, place,
+                                tasksModel.makeModelIndex(itemIndex));
+                            } else {
+                                tasksModel.move(itemIndex, place);
+                            }
+                          }
+                          place++;
+                      }
+                    mouseHandler.resetArea();
+                    taskList.layout()
+                    needLayoutRefresh = false;
+                }
+             }
+          }
+       }
+    }
 
     function hasLauncher(url) {
         return tasksModel.launcherPosition(url) != -1;
@@ -485,9 +598,10 @@ MouseArea {
         if (typeof index !== "number") {
             return;
         }
-
         var task = taskRepeater.itemAt(index);
         if (task) {
+            restoreManualSort(task)
+            task = taskRepeater.itemAt(index);
             TaskTools.activateTask(task.modelIndex(), task.m, null, task);
         }
     }

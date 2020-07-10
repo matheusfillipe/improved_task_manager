@@ -27,6 +27,7 @@ import "code/tools.js" as TaskTools
 
 Item {
     signal urlsDropped(var urls)
+    signal itemDragged(var insertAt, var prevIndex, var above)
 
     property Item target
     property Item ignoredItem
@@ -34,6 +35,13 @@ Item {
 
     property alias hoveredItem: dropHandler.hoveredItem
     property alias handleWheelEvents: wheelHandler.active
+
+    function resetArea(){
+       ignoreItemTimer.stop();
+       hoveredItem = null;
+       activationTimer.stop();
+       ignoredItem=null
+    }
 
     Timer {
         id: ignoreItemTimer
@@ -123,6 +131,8 @@ Item {
 
                     ignoredItem = above;
                     ignoreItemTimer.restart();
+                    var prevIndex=tasks.dragSource.itemIndex;
+                    itemDragged(insertAt, prevIndex, above)
                 }
             } else if (!tasks.dragSource && hoveredItem !== above) {
                 hoveredItem = above;
